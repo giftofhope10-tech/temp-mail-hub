@@ -14,7 +14,68 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      received_emails: {
+        Row: {
+          body_html: string | null
+          body_text: string | null
+          from_address: string
+          id: string
+          is_read: boolean
+          received_at: string
+          subject: string | null
+          temp_email_id: string
+        }
+        Insert: {
+          body_html?: string | null
+          body_text?: string | null
+          from_address: string
+          id?: string
+          is_read?: boolean
+          received_at?: string
+          subject?: string | null
+          temp_email_id: string
+        }
+        Update: {
+          body_html?: string | null
+          body_text?: string | null
+          from_address?: string
+          id?: string
+          is_read?: boolean
+          received_at?: string
+          subject?: string | null
+          temp_email_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "received_emails_temp_email_id_fkey"
+            columns: ["temp_email_id"]
+            isOneToOne: false
+            referencedRelation: "temp_emails"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      temp_emails: {
+        Row: {
+          created_at: string
+          email_address: string
+          expires_at: string
+          id: string
+        }
+        Insert: {
+          created_at?: string
+          email_address: string
+          expires_at?: string
+          id?: string
+        }
+        Update: {
+          created_at?: string
+          email_address?: string
+          expires_at?: string
+          id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
