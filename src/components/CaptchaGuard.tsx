@@ -16,7 +16,9 @@ declare global {
   }
 }
 
-const TURNSTILE_SITE_KEY = "0x4AAAAAABjJEp6GHMrBYdGn";
+// Cloudflare Turnstile test key (always passes) — replace with your real site key
+// after adding your domains in Cloudflare Turnstile dashboard
+const TURNSTILE_SITE_KEY = "1x00000000000000000000AA";
 
 const CaptchaGuard = ({ onVerified }: CaptchaGuardProps) => {
   const [loading, setLoading] = useState(true);
