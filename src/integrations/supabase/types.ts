@@ -14,6 +14,68 @@ export type Database = {
   }
   public: {
     Tables: {
+      api_keys: {
+        Row: {
+          allowed_domains: string[]
+          api_key: string
+          created_at: string
+          email: string
+          id: string
+          is_active: boolean
+          plan: string
+          rate_limit_per_minute: number
+        }
+        Insert: {
+          allowed_domains?: string[]
+          api_key: string
+          created_at?: string
+          email: string
+          id?: string
+          is_active?: boolean
+          plan?: string
+          rate_limit_per_minute?: number
+        }
+        Update: {
+          allowed_domains?: string[]
+          api_key?: string
+          created_at?: string
+          email?: string
+          id?: string
+          is_active?: boolean
+          plan?: string
+          rate_limit_per_minute?: number
+        }
+        Relationships: []
+      }
+      api_usage: {
+        Row: {
+          api_key_id: string
+          endpoint: string
+          id: string
+          requested_at: string
+        }
+        Insert: {
+          api_key_id: string
+          endpoint: string
+          id?: string
+          requested_at?: string
+        }
+        Update: {
+          api_key_id?: string
+          endpoint?: string
+          id?: string
+          requested_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "api_usage_api_key_id_fkey"
+            columns: ["api_key_id"]
+            isOneToOne: false
+            referencedRelation: "api_keys"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       received_emails: {
         Row: {
           body_html: string | null
@@ -81,7 +143,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      cleanup_expired_emails: { Args: never; Returns: undefined }
     }
     Enums: {
       [_ in never]: never
