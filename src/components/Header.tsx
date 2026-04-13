@@ -1,4 +1,5 @@
-import { Mail, Shield } from "lucide-react";
+import { Mail, Shield, Code } from "lucide-react";
+import { Link } from "react-router-dom";
 
 const Header = () => {
   return (
@@ -13,9 +14,18 @@ const Header = () => {
             <p className="text-[10px] text-muted-foreground leading-none">Disposable Email</p>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Shield className="h-3.5 w-3.5 text-primary" />
-          <span>Secured</span>
+        <div className="flex items-center gap-3">
+          <Link
+            to="/developers"
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"
+          >
+            <Code className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">API</span>
+          </Link>
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Shield className="h-3.5 w-3.5 text-primary" />
+            <span>Secured</span>
+          </div>
         </div>
       </div>
     </header>

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import Header from "@/components/Header";
 import EmailGenerator from "@/components/EmailGenerator";
 import EmailInbox, { type Email } from "@/components/EmailInbox";
@@ -8,6 +8,37 @@ import { generateEmail } from "@/lib/emailUtils";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
+const STORAGE_KEY = "tempmail_session";
+const SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 hours
+
+interface StoredSession {
+  email: string;
+  domain: string;
+  sessionId: string;
+  createdAt: number;
+}
+
+function loadSession(): StoredSession | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const session: StoredSession = JSON.parse(raw);
+    const elapsed = Date.now() - session.createdAt;
+    if (elapsed >= SESSION_DURATION) {
+      localStorage.removeItem(STORAGE_KEY);
+      return null;
+    }
+    return session;
+  } catch {
+    localStorage.removeItem(STORAGE_KEY);
+    return null;
+  }
+}
+
+function saveSession(session: StoredSession) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+}
+
 const Index = () => {
   const [verified, setVerified] = useState(false);
   const [email, setEmail] = useState("");
@@ -15,25 +46,48 @@ const Index = () => {
   const [emails, setEmails] = useState<Email[]>([]);
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [createdAt, setCreatedAt] = useState<number>(Date.now());
+  const initialized = useRef(false);
 
-  // Initialize email on verification
+  // Initialize email on verification — restore or create new
   useEffect(() => {
-    if (verified && !email) {
+    if (!verified || initialized.current) return;
+    initialized.current = true;
+
+    const existing = loadSession();
+    if (existing) {
+      setEmail(existing.email);
+      setDomain(existing.domain);
+      setSessionId(existing.sessionId);
+      setCreatedAt(existing.createdAt);
+    } else {
       const newEmail = generateEmail();
       setEmail(newEmail.email);
       setDomain(newEmail.domain);
-      registerEmail(newEmail.email);
+      registerEmail(newEmail.email, newEmail.domain);
     }
-  }, [verified, email]);
+  }, [verified]);
 
   // Poll for new emails every 5 seconds
   useEffect(() => {
     if (!sessionId) return;
+    fetchEmails();
     const interval = setInterval(() => fetchEmails(), 5000);
     return () => clearInterval(interval);
   }, [sessionId]);
 
-  const registerEmail = async (emailAddr: string) => {
+  // Auto-delete when 24h expires
+  useEffect(() => {
+    const remaining = SESSION_DURATION - (Date.now() - createdAt);
+    if (remaining <= 0) return;
+    const timer = setTimeout(() => {
+      handleDeleteEmail();
+      toast.info("Email expired after 24 hours, new one generated!");
+    }, remaining);
+    return () => clearTimeout(timer);
+  }, [createdAt]);
+
+  const registerEmail = async (emailAddr: string, emailDomain: string) => {
     try {
       const { data, error } = await supabase
         .from("temp_emails")
@@ -42,10 +96,16 @@ const Index = () => {
         .single();
 
       if (error) throw error;
+      const now = Date.now();
       setSessionId(data.id);
+      setCreatedAt(now);
+      saveSession({ email: emailAddr, domain: emailDomain, sessionId: data.id, createdAt: now });
     } catch {
-      // If table doesn't exist yet, just use local state
-      setSessionId("local-" + Date.now());
+      const fallbackId = "local-" + Date.now();
+      const now = Date.now();
+      setSessionId(fallbackId);
+      setCreatedAt(now);
+      saveSession({ email: emailAddr, domain: emailDomain, sessionId: fallbackId, createdAt: now });
     }
   };
 
@@ -62,18 +122,19 @@ const Index = () => {
       if (error) throw error;
       if (data) {
         setEmails(
-          data.map((e: Record<string, unknown>) => ({
-            id: e.id as string,
-            from: e.from_address as string,
-            subject: (e.subject as string) || "",
-            body: (e.body_text as string) || "",
-            received_at: new Date(e.received_at as string),
-            read: (e.is_read as boolean) || false,
+          data.map((e) => ({
+            id: e.id,
+            from: e.from_address,
+            subject: e.subject || "",
+            body: e.body_text || "",
+            body_html: e.body_html || "",
+            received_at: new Date(e.received_at),
+            read: e.is_read || false,
           }))
         );
       }
     } catch {
-      // Silently handle - table might not exist yet
+      // Silently handle
     } finally {
       setLoading(false);
     }
@@ -84,16 +145,18 @@ const Index = () => {
     setDomain(newDomain);
     setEmails([]);
     setSessionId(null);
-    registerEmail(newEmail);
+    registerEmail(newEmail, newDomain);
   }, []);
 
   const handleDeleteEmail = useCallback(() => {
+    localStorage.removeItem(STORAGE_KEY);
+    initialized.current = false;
     const newEmail = generateEmail();
     setEmail(newEmail.email);
     setDomain(newEmail.domain);
     setEmails([]);
     setSessionId(null);
-    registerEmail(newEmail.email);
+    registerEmail(newEmail.email, newEmail.domain);
     toast.success("Email deleted, new one generated!");
   }, []);
 
@@ -115,7 +178,7 @@ const Index = () => {
           onNewEmail={handleNewEmail}
           onDeleteEmail={handleDeleteEmail}
         />
-        <StatsBar />
+        <StatsBar createdAt={createdAt} />
         <EmailInbox
           emails={emails}
           loading={loading}
