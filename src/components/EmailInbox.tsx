@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { RefreshCw, Inbox, Mail, Clock, ChevronRight, ArrowLeft, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatTimeAgo } from "@/lib/emailUtils";
@@ -8,6 +8,7 @@ export interface Email {
   from: string;
   subject: string;
   body: string;
+  body_html?: string;
   received_at: Date;
   read: boolean;
 }
@@ -18,6 +19,75 @@ interface EmailInboxProps {
   onRefresh: () => void;
   onDeleteEmail: (id: string) => void;
 }
+
+const EmailHtmlViewer = ({ html }: { html: string }) => {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [height, setHeight] = useState(300);
+
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+
+    const doc = iframe.contentDocument;
+    if (!doc) return;
+
+    doc.open();
+    doc.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <style>
+            body {
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+              font-size: 14px;
+              line-height: 1.6;
+              color: #e0d5c8;
+              background: transparent;
+              margin: 0;
+              padding: 0;
+              word-wrap: break-word;
+              overflow-wrap: break-word;
+            }
+            a { color: #5b9cf5; }
+            img { max-width: 100%; height: auto; }
+            table { max-width: 100% !important; }
+            * { max-width: 100% !important; box-sizing: border-box; }
+          </style>
+        </head>
+        <body>${html}</body>
+      </html>
+    `);
+    doc.close();
+
+    const resizeObserver = new ResizeObserver(() => {
+      const body = iframe.contentDocument?.body;
+      if (body) {
+        setHeight(Math.min(body.scrollHeight + 20, 800));
+      }
+    });
+
+    setTimeout(() => {
+      const body = iframe.contentDocument?.body;
+      if (body) {
+        setHeight(Math.min(body.scrollHeight + 20, 800));
+        resizeObserver.observe(body);
+      }
+    }, 100);
+
+    return () => resizeObserver.disconnect();
+  }, [html]);
+
+  return (
+    <iframe
+      ref={iframeRef}
+      sandbox="allow-same-origin"
+      style={{ width: "100%", height: `${height}px`, border: "none", background: "transparent" }}
+      title="Email content"
+    />
+  );
+};
 
 const EmailInbox = ({ emails, loading, onRefresh, onDeleteEmail }: EmailInboxProps) => {
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
@@ -55,8 +125,14 @@ const EmailInbox = ({ emails, loading, onRefresh, onDeleteEmail }: EmailInboxPro
             <Clock className="h-3 w-3" />
             {formatTimeAgo(selectedEmail.received_at)}
           </div>
-          <div className="text-sm text-secondary-foreground leading-relaxed whitespace-pre-wrap">
-            {selectedEmail.body || "No content"}
+          <div className="text-sm text-secondary-foreground leading-relaxed">
+            {selectedEmail.body_html ? (
+              <EmailHtmlViewer html={selectedEmail.body_html} />
+            ) : (
+              <div className="whitespace-pre-wrap">
+                {selectedEmail.body || "No content"}
+              </div>
+            )}
           </div>
         </div>
       </div>
