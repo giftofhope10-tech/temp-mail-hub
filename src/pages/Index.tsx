@@ -5,6 +5,7 @@ import EmailInbox, { type Email } from "@/components/EmailInbox";
 import CaptchaGuard from "@/components/CaptchaGuard";
 import StatsBar from "@/components/StatsBar";
 import { generateEmail } from "@/lib/emailUtils";
+import { parseStoredEmailContent } from "@/lib/emailContent";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
@@ -122,15 +123,19 @@ const Index = () => {
       if (error) throw error;
       if (data) {
         setEmails(
-          data.map((e) => ({
-            id: e.id,
-            from: e.from_address,
-            subject: e.subject || "",
-            body: e.body_text || "",
-            body_html: e.body_html || "",
-            received_at: new Date(e.received_at),
-            read: e.is_read || false,
-          }))
+          data.map((e) => {
+            const parsedContent = parseStoredEmailContent(e.body_text, e.body_html);
+
+            return {
+              id: e.id,
+              from: e.from_address,
+              subject: e.subject || "",
+              body: parsedContent.text || "",
+              body_html: parsedContent.html || "",
+              received_at: new Date(e.received_at),
+              read: e.is_read || false,
+            };
+          })
         );
       }
     } catch {
