@@ -1,14 +1,22 @@
 import express from "express";
 import cors from "cors";
-import { db } from "./db.js";
-import { tempEmails, receivedEmails, apiKeys, apiUsage } from "./schema.js";
-import { eq, desc, gte, sql } from "drizzle-orm";
+import { createClient } from "@supabase/supabase-js";
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 
 const PORT = process.env.PORT || 3000;
+
+const SUPABASE_URL = process.env.SUPABASE_URL!;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+  process.exit(1);
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // ── Temp Email Routes ─────────────────────────────────────────────────────────
 
@@ -17,11 +25,13 @@ app.post("/api/emails", async (req, res) => {
   const { email_address } = req.body;
   if (!email_address) return res.status(400).json({ error: "email_address required" });
   try {
-    const [row] = await db
-      .insert(tempEmails)
-      .values({ email_address })
-      .returning({ id: tempEmails.id, email_address: tempEmails.email_address, created_at: tempEmails.created_at, expires_at: tempEmails.expires_at });
-    res.json(row);
+    const { data, error } = await supabase
+      .from("temp_emails")
+      .insert({ email_address })
+      .select("id, email_address, created_at, expires_at")
+      .single();
+    if (error) throw error;
+    res.json(data);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -31,13 +41,14 @@ app.post("/api/emails", async (req, res) => {
 app.get("/api/emails/:id/messages", async (req, res) => {
   const { id } = req.params;
   try {
-    const rows = await db
-      .select()
-      .from(receivedEmails)
-      .where(eq(receivedEmails.temp_email_id, id))
-      .orderBy(desc(receivedEmails.received_at))
+    const { data, error } = await supabase
+      .from("received_emails")
+      .select("*")
+      .eq("temp_email_id", id)
+      .order("received_at", { ascending: false })
       .limit(50);
-    res.json(rows);
+    if (error) throw error;
+    res.json(data || []);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -47,14 +58,15 @@ app.get("/api/emails/:id/messages", async (req, res) => {
 app.delete("/api/emails/:id", async (req, res) => {
   const { id } = req.params;
   try {
-    await db.delete(receivedEmails).where(eq(receivedEmails.id, id));
+    const { error } = await supabase.from("received_emails").delete().eq("id", id);
+    if (error) throw error;
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── Receive-Email Webhook ─────────────────────────────────────────────────────
+// ── Receive-Email Webhook (Cloudflare Email Workers) ─────────────────────────
 
 const WEBHOOK_SECRET = process.env.EMAIL_WEBHOOK_SECRET || "";
 const MIME_PATTERN = /(content-type:\s*(multipart\/|text\/plain|text\/html)|content-transfer-encoding:|^--[-\w.=]+$)/im;
@@ -70,9 +82,9 @@ function decodeQuotedPrintable(value: string): string {
     if (c === "=" && /^[0-9A-F]{2}$/i.test(hex)) { bytes.push(parseInt(hex, 16)); i += 2; continue; }
     const code = c.charCodeAt(0);
     if (code <= 0xff) bytes.push(code);
-    else bytes.push(...new TextEncoder().encode(c));
+    else bytes.push(...Buffer.from(c, "utf-8"));
   }
-  return new TextDecoder().decode(new Uint8Array(bytes));
+  return Buffer.from(bytes).toString("utf-8");
 }
 
 function decodeBase64(value: string): string {
@@ -138,32 +150,41 @@ function parseEmailContent(text?: string, html?: string) {
   return { text: decodeContent(textSrc).trim(), html: htmlSrc };
 }
 
-// POST /api/webhook/receive-email — inbound email webhook
+// POST /api/webhook/receive-email — inbound email from Cloudflare Email Worker
 app.post("/api/webhook/receive-email", async (req, res) => {
   const secret = req.headers["x-webhook-secret"];
   if (WEBHOOK_SECRET && secret !== WEBHOOK_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
   }
+
   const { to, from, subject, text, html } = req.body;
   if (!to || !from) return res.status(400).json({ error: "Missing required fields: to, from" });
 
   const recipientEmail = Array.isArray(to) ? to[0] : to;
-  const normalizedRecipient = (typeof recipientEmail === "string" ? recipientEmail : recipientEmail?.address ?? "").toLowerCase();
+  const normalizedRecipient = (typeof recipientEmail === "string"
+    ? recipientEmail
+    : (recipientEmail?.address ?? "")).toLowerCase();
 
   try {
-    const [tempEmail] = await db
-      .select({ id: tempEmails.id, expires_at: tempEmails.expires_at })
-      .from(tempEmails)
-      .where(eq(tempEmails.email_address, normalizedRecipient))
-      .limit(1);
+    const { data: tempEmail, error: lookupError } = await supabase
+      .from("temp_emails")
+      .select("id, expires_at")
+      .eq("email_address", normalizedRecipient)
+      .single();
 
-    if (!tempEmail) return res.status(404).json({ error: "Recipient not found" });
-    if (new Date(tempEmail.expires_at) < new Date()) return res.status(410).json({ error: "Email address expired" });
+    if (lookupError || !tempEmail) {
+      console.log(`No temp email found for: ${normalizedRecipient}`);
+      return res.status(404).json({ error: "Recipient not found" });
+    }
+
+    if (new Date(tempEmail.expires_at) < new Date()) {
+      return res.status(410).json({ error: "Email address expired" });
+    }
 
     const parsed = parseEmailContent(text, html);
     const sender = typeof from === "string" ? from : from?.address || from?.[0] || "Unknown sender";
 
-    await db.insert(receivedEmails).values({
+    const { error: insertError } = await supabase.from("received_emails").insert({
       temp_email_id: tempEmail.id,
       from_address: sender,
       subject: subject || "(No Subject)",
@@ -171,6 +192,12 @@ app.post("/api/webhook/receive-email", async (req, res) => {
       body_html: parsed.html,
     });
 
+    if (insertError) {
+      console.error("Insert error:", insertError);
+      return res.status(500).json({ error: "Failed to store email" });
+    }
+
+    console.log(`Email stored for ${normalizedRecipient} from ${sender}`);
     res.json({ success: true });
   } catch (err: any) {
     console.error("Error processing email:", err);
@@ -191,58 +218,54 @@ function generateUsername() {
   return `${a}${n}${num}`;
 }
 
-async function validateApiKey(key: string) {
-  const [keyData] = await db.select().from(apiKeys).where(eq(apiKeys.api_key, key)).limit(1);
-  if (!keyData || !keyData.is_active) return null;
-  return keyData;
-}
-
-async function checkRateLimit(keyId: string, limitPerMinute: number): Promise<boolean> {
-  const oneMinuteAgo = new Date(Date.now() - 60000).toISOString();
-  const result = await db
-    .select({ count: sql<number>`count(*)` })
-    .from(apiUsage)
-    .where(eq(apiUsage.api_key_id, keyId));
-  // More accurate: filter by time
-  const recent = await db.execute(
-    sql`SELECT count(*) FROM api_usage WHERE api_key_id = ${keyId} AND requested_at >= ${oneMinuteAgo}`
-  );
-  const count = Number((recent.rows[0] as any)?.count ?? 0);
-  return count < limitPerMinute;
-}
-
-// POST /api/dev/api-keys — generate an API key
+// POST /api/dev/api-keys — generate a developer API key (no auth required)
 app.post("/api/dev/api-keys", async (req, res) => {
   const { email } = req.body;
   if (!email || !email.includes("@")) return res.status(400).json({ error: "Valid email required" });
   try {
     const key = "tm_" + crypto.randomUUID().replace(/-/g, "");
-    const [row] = await db.insert(apiKeys).values({
+    const { error } = await supabase.from("api_keys").insert({
       api_key: key,
       email,
       plan: "free",
       allowed_domains: ["kameti.online"],
       rate_limit_per_minute: 10,
-    }).returning();
-    res.json({ api_key: row.api_key });
+    });
+    if (error) throw error;
+    res.json({ api_key: key });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to generate key. Email may already have a key." });
   }
 });
 
-// Developer API middleware
+// Developer API middleware — validate x-api-key + rate limit
 const devRouter = express.Router();
 
 devRouter.use(async (req, res, next) => {
   const apiKey = req.headers["x-api-key"] as string;
   if (!apiKey) return res.status(401).json({ error: "Missing x-api-key header" });
-  const keyData = await validateApiKey(apiKey);
-  if (!keyData) return res.status(403).json({ error: "Invalid or inactive API key" });
 
-  const withinLimit = await checkRateLimit(keyData.id, keyData.rate_limit_per_minute);
-  if (!withinLimit) return res.status(429).json({ error: "Rate limit exceeded", limit: keyData.rate_limit_per_minute, reset_in: "60s" });
+  const { data: keyData, error } = await supabase
+    .from("api_keys")
+    .select("*")
+    .eq("api_key", apiKey)
+    .eq("is_active", true)
+    .single();
 
-  await db.insert(apiUsage).values({ api_key_id: keyData.id, endpoint: req.path });
+  if (error || !keyData) return res.status(403).json({ error: "Invalid or inactive API key" });
+
+  const oneMinuteAgo = new Date(Date.now() - 60000).toISOString();
+  const { count } = await supabase
+    .from("api_usage")
+    .select("*", { count: "exact", head: true })
+    .eq("api_key_id", keyData.id)
+    .gte("requested_at", oneMinuteAgo);
+
+  if ((count || 0) >= keyData.rate_limit_per_minute) {
+    return res.status(429).json({ error: "Rate limit exceeded", limit: keyData.rate_limit_per_minute, reset_in: "60s" });
+  }
+
+  await supabase.from("api_usage").insert({ api_key_id: keyData.id, endpoint: req.path });
   (req as any).keyData = keyData;
   next();
 });
@@ -257,15 +280,20 @@ devRouter.post("/generate", async (req, res) => {
   const keyData = (req as any).keyData;
   const domain = req.body.domain || keyData.allowed_domains?.[0] || "kameti.online";
   const allowed = keyData.plan === "paid" ? ALL_DOMAINS : (keyData.allowed_domains || [ALL_DOMAINS[0]]);
-  if (!allowed.includes(domain)) return res.status(403).json({ error: `Domain '${domain}' not available on your plan.` });
-
+  if (!allowed.includes(domain)) {
+    return res.status(403).json({ error: `Domain '${domain}' not available on your plan.` });
+  }
   const username = generateUsername();
   const emailAddr = `${username}@${domain}`;
   try {
-    const [row] = await db.insert(tempEmails).values({ email_address: emailAddr })
-      .returning({ id: tempEmails.id, email_address: tempEmails.email_address, created_at: tempEmails.created_at, expires_at: tempEmails.expires_at });
-    res.json({ email: row });
-  } catch (err: any) {
+    const { data, error } = await supabase
+      .from("temp_emails")
+      .insert({ email_address: emailAddr })
+      .select("id, email_address, created_at, expires_at")
+      .single();
+    if (error) throw error;
+    res.json({ email: data });
+  } catch {
     res.status(500).json({ error: "Failed to create email" });
   }
 });
@@ -274,8 +302,14 @@ devRouter.get("/inbox", async (req, res) => {
   const emailId = req.query.email_id as string;
   if (!emailId) return res.status(400).json({ error: "email_id parameter required" });
   try {
-    const rows = await db.select().from(receivedEmails).where(eq(receivedEmails.temp_email_id, emailId)).orderBy(desc(receivedEmails.received_at)).limit(50);
-    res.json({ emails: rows });
+    const { data, error } = await supabase
+      .from("received_emails")
+      .select("id, from_address, subject, body_text, body_html, received_at, is_read")
+      .eq("temp_email_id", emailId)
+      .order("received_at", { ascending: false })
+      .limit(50);
+    if (error) throw error;
+    res.json({ emails: data || [] });
   } catch {
     res.status(500).json({ error: "Failed to fetch emails" });
   }
@@ -285,7 +319,8 @@ devRouter.delete("/email", async (req, res) => {
   const id = req.query.id as string;
   if (!id) return res.status(400).json({ error: "id parameter required" });
   try {
-    await db.delete(receivedEmails).where(eq(receivedEmails.id, id));
+    const { error } = await supabase.from("received_emails").delete().eq("id", id);
+    if (error) throw error;
     res.json({ success: true });
   } catch {
     res.status(500).json({ error: "Failed to delete" });
