@@ -22,68 +22,71 @@ interface EmailInboxProps {
 
 const EmailHtmlViewer = ({ html }: { html: string }) => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [height, setHeight] = useState(300);
+  const [height, setHeight] = useState(400);
+
+  const srcdocContent = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      color: #1f1f1f;
+      background: #ffffff;
+      margin: 0;
+      padding: 16px;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
+    a { color: #1a73e8; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    img { max-width: 100%; height: auto; display: block; }
+    table { max-width: 100% !important; border-collapse: collapse; }
+    td, th { word-break: break-word; }
+    * { max-width: 100% !important; box-sizing: border-box; }
+    blockquote { border-left: 3px solid #dadce0; margin: 8px 0; padding: 0 12px; color: #5f6368; }
+    pre { background: #f8f9fa; padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 13px; }
+    h1, h2, h3, h4, h5, h6 { color: #202124; }
+    hr { border: none; border-top: 1px solid #dadce0; margin: 16px 0; }
+    p { margin: 0 0 12px 0; }
+  </style>
+  <script>
+    function sendHeight() {
+      var h = document.documentElement.scrollHeight;
+      window.parent.postMessage({ type: 'email-iframe-height', height: h }, '*');
+    }
+    window.addEventListener('load', function() { setTimeout(sendHeight, 50); setTimeout(sendHeight, 300); });
+    new MutationObserver(sendHeight).observe(document.body, { childList: true, subtree: true });
+  </script>
+</head>
+<body>${html.replace(/`/g, '\\`').replace(/<script[\s\S]*?<\/script>/gi, '')}</body>
+</html>`;
 
   useEffect(() => {
-    const iframe = iframeRef.current;
-    if (!iframe) return;
-
-    const doc = iframe.contentDocument;
-    if (!doc) return;
-
-    doc.open();
-    doc.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <style>
-            body {
-              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-              font-size: 14px;
-              line-height: 1.6;
-              color: #e0d5c8;
-              background: transparent;
-              margin: 0;
-              padding: 0;
-              word-wrap: break-word;
-              overflow-wrap: break-word;
-            }
-            a { color: #5b9cf5; }
-            img { max-width: 100%; height: auto; }
-            table { max-width: 100% !important; }
-            * { max-width: 100% !important; box-sizing: border-box; }
-          </style>
-        </head>
-        <body>${html}</body>
-      </html>
-    `);
-    doc.close();
-
-    const resizeObserver = new ResizeObserver(() => {
-      const body = iframe.contentDocument?.body;
-      if (body) {
-        setHeight(Math.min(body.scrollHeight + 20, 800));
+    const handleMessage = (e: MessageEvent) => {
+      if (e.data?.type === 'email-iframe-height' && typeof e.data.height === 'number') {
+        setHeight(Math.max(200, Math.min(e.data.height + 32, 1200)));
       }
-    });
-
-    setTimeout(() => {
-      const body = iframe.contentDocument?.body;
-      if (body) {
-        setHeight(Math.min(body.scrollHeight + 20, 800));
-        resizeObserver.observe(body);
-      }
-    }, 100);
-
-    return () => resizeObserver.disconnect();
-  }, [html]);
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
 
   return (
     <iframe
       ref={iframeRef}
-      sandbox="allow-same-origin"
-      style={{ width: "100%", height: `${height}px`, border: "none", background: "transparent" }}
+      srcDoc={srcdocContent}
+      sandbox="allow-same-origin allow-scripts"
+      style={{
+        width: "100%",
+        height: `${height}px`,
+        border: "none",
+        borderRadius: "8px",
+        background: "#ffffff",
+      }}
       title="Email content"
     />
   );
