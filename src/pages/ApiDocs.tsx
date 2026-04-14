@@ -2,10 +2,9 @@ import { useState } from "react";
 import { Copy, Check, Key, Zap, Shield, Globe, Mail, ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
 import { Link } from "react-router-dom";
 
-const BASE_URL = "https://nkgpfgzsrtarracdkape.supabase.co/functions/v1/tempmail-api";
+const BASE_URL = `${window.location.origin}/api/dev`;
 
 const ApiDocs = () => {
   const [email, setEmail] = useState("");
@@ -20,19 +19,20 @@ const ApiDocs = () => {
     }
     setGenerating(true);
     try {
-      const key = "tm_" + crypto.randomUUID().replace(/-/g, "");
-      const { error } = await supabase.from("api_keys").insert({
-        api_key: key,
-        email,
-        plan: "free",
-        allowed_domains: ["kameti.online"],
-        rate_limit_per_minute: 10,
+      const res = await fetch("/api/dev/api-keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
       });
-      if (error) throw error;
-      setApiKey(key);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to generate key");
+      }
+      const data = await res.json();
+      setApiKey(data.api_key);
       toast.success("API key generated!");
-    } catch {
-      toast.error("Failed to generate key. Email may already have a key.");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to generate key. Email may already have a key.");
     } finally {
       setGenerating(false);
     }

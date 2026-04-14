@@ -6,11 +6,10 @@ import CaptchaGuard from "@/components/CaptchaGuard";
 import StatsBar from "@/components/StatsBar";
 import { generateEmail } from "@/lib/emailUtils";
 import { parseStoredEmailContent } from "@/lib/emailContent";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
 const STORAGE_KEY = "tempmail_session";
-const SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 hours
+const SESSION_DURATION = 24 * 60 * 60 * 1000;
 
 interface StoredSession {
   email: string;
@@ -50,7 +49,6 @@ const Index = () => {
   const [createdAt, setCreatedAt] = useState<number>(Date.now());
   const initialized = useRef(false);
 
-  // Initialize email on verification — restore or create new
   useEffect(() => {
     if (!verified || initialized.current) return;
     initialized.current = true;
@@ -69,7 +67,6 @@ const Index = () => {
     }
   }, [verified]);
 
-  // Poll for new emails every 5 seconds
   useEffect(() => {
     if (!sessionId) return;
     fetchEmails();
@@ -77,7 +74,6 @@ const Index = () => {
     return () => clearInterval(interval);
   }, [sessionId]);
 
-  // Auto-delete when 24h expires
   useEffect(() => {
     const remaining = SESSION_DURATION - (Date.now() - createdAt);
     if (remaining <= 0) return;
@@ -90,13 +86,13 @@ const Index = () => {
 
   const registerEmail = async (emailAddr: string, emailDomain: string) => {
     try {
-      const { data, error } = await supabase
-        .from("temp_emails")
-        .insert({ email_address: emailAddr })
-        .select("id")
-        .single();
-
-      if (error) throw error;
+      const res = await fetch("/api/emails", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email_address: emailAddr }),
+      });
+      if (!res.ok) throw new Error("Failed to register");
+      const data = await res.json();
       const now = Date.now();
       setSessionId(data.id);
       setCreatedAt(now);
@@ -114,32 +110,25 @@ const Index = () => {
     if (!sessionId) return;
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("received_emails")
-        .select("*")
-        .eq("temp_email_id", sessionId)
-        .order("received_at", { ascending: false });
-
-      if (error) throw error;
-      if (data) {
-        setEmails(
-          data.map((e) => {
-            const parsedContent = parseStoredEmailContent(e.body_text, e.body_html);
-
-            return {
-              id: e.id,
-              from: e.from_address,
-              subject: e.subject || "",
-              body: parsedContent.text || "",
-              body_html: parsedContent.html || "",
-              received_at: new Date(e.received_at),
-              read: e.is_read || false,
-            };
-          })
-        );
-      }
+      const res = await fetch(`/api/emails/${sessionId}/messages`);
+      if (!res.ok) throw new Error("Failed to fetch");
+      const data = await res.json();
+      setEmails(
+        data.map((e: any) => {
+          const parsedContent = parseStoredEmailContent(e.body_text, e.body_html);
+          return {
+            id: e.id,
+            from: e.from_address,
+            subject: e.subject || "",
+            body: parsedContent.text || "",
+            body_html: parsedContent.html || "",
+            received_at: new Date(e.received_at),
+            read: e.is_read || false,
+          };
+        })
+      );
     } catch {
-      // Silently handle
+      // silently handle
     } finally {
       setLoading(false);
     }
