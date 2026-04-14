@@ -5,48 +5,63 @@ A disposable temporary email service. Users get a random email address that rece
 ## Architecture
 
 **Frontend:** React + Vite + TypeScript + Tailwind CSS + shadcn/ui (port 5000)
-**Backend:** Express.js + TypeScript + Drizzle ORM (port 3000)
-**Database:** Replit PostgreSQL
+**Backend:** Express.js + TypeScript (port 3000)
+**Database:** Supabase PostgreSQL (project: lwsrdqpxnlrzjqucbdwt)
+**Email Routing:** Cloudflare Email Routing → Email Worker → backend webhook
 
-In development, both run together via `concurrently`. Vite proxies `/api/*` requests to the Express server.
+In development, both frontend and backend run together via `concurrently`. Vite proxies all `/api/*` requests to the Express server.
 
 ## Key Files
 
-- `server/index.ts` — Express server with all API routes
-- `server/schema.ts` — Drizzle ORM schema (temp_emails, received_emails, api_keys, api_usage)
-- `server/db.ts` — Database connection
+- `server/index.ts` — Express server with all API routes (uses Supabase service role key server-side only)
 - `src/pages/Index.tsx` — Main app page (email generator + inbox)
 - `src/pages/ApiDocs.tsx` — Developer API documentation page
 - `src/components/` — React UI components
-- `drizzle.config.ts` — Drizzle configuration
-- `vite.config.ts` — Vite with API proxy to backend
+- `cloudflare-worker/email-worker.js` — Cloudflare Email Worker script (receives inbound emails)
+- `cloudflare-worker/wrangler.toml` — Cloudflare Worker config
+- `supabase/setup.sql` — SQL to create all tables in Supabase
 
 ## API Routes
 
+### Internal (used by frontend)
 - `POST /api/emails` — Register a new temp email address
 - `GET /api/emails/:id/messages` — Fetch inbox for a temp email
 - `DELETE /api/emails/:id` — Delete a received email
-- `POST /api/webhook/receive-email` — Inbound email webhook (secured with EMAIL_WEBHOOK_SECRET)
+
+### Webhook (Cloudflare Email Worker → backend)
+- `POST /api/webhook/receive-email` — Inbound email from Cloudflare (secured with x-webhook-secret header)
+
+### Developer API (requires x-api-key header)
 - `POST /api/dev/api-keys` — Generate a developer API key
-- `GET /api/dev/domains` — List available domains (requires x-api-key)
-- `POST /api/dev/generate` — Generate temp email via API (requires x-api-key)
-- `GET /api/dev/inbox` — Fetch inbox via API (requires x-api-key)
-- `DELETE /api/dev/email` — Delete email via API (requires x-api-key)
+- `GET /api/dev/domains` — List available domains
+- `POST /api/dev/generate` — Generate temp email via API
+- `GET /api/dev/inbox` — Fetch inbox via API
+- `DELETE /api/dev/email` — Delete email via API
 
-## Environment Variables
+## Environment Variables / Secrets
 
-- `DATABASE_URL` — PostgreSQL connection string (auto-set by Replit)
-- `EMAIL_WEBHOOK_SECRET` — Optional secret for securing the inbound email webhook
+- `SUPABASE_URL` — Supabase project URL (env var)
+- `SUPABASE_SERVICE_ROLE_KEY` — Service role key (secret, server-side only)
+- `SUPABASE_ANON_KEY` — Anon/public key (secret)
+- `EMAIL_WEBHOOK_SECRET` — Webhook secret for Cloudflare Email Worker (secret)
+- `SUPABASE_DB_PASSWORD` — Supabase DB password (secret, used for direct migrations)
+
+## Cloudflare Email Worker Setup
+
+1. Go to Cloudflare Dashboard → Workers & Pages → Create Worker
+2. Paste `cloudflare-worker/email-worker.js`
+3. Set environment variables in the worker:
+   - `WEBHOOK_URL` = `https://your-app.replit.app/api/webhook/receive-email`
+   - `WEBHOOK_SECRET` = (value of EMAIL_WEBHOOK_SECRET secret)
+4. In Cloudflare Email Routing, add catch-all rules for each domain pointing to this worker:
+   - kameti.online, giftofhop.online, globaljobpoint.com
+
+## Domains
+
+Three email domains: `kameti.online`, `giftofhop.online`, `globaljobpoint.com`
 
 ## Running
 
 ```bash
-npm run dev       # Start both frontend and backend
-npm run db:push   # Sync database schema
+npm run dev   # Start both frontend and backend
 ```
-
-## Domains
-
-Three email domains are configured: `kameti.online`, `giftofhop.online`, `globaljobpoint.com`
-
-To receive emails at these domains, configure an MX record pointing to a mail server that POSTs to `/api/webhook/receive-email`.

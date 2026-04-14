@@ -1,0 +1,8 @@
+name = "tempmail-email-worker"
+main = "email-worker.js"
+compatibility_date = "2024-01-01"
+
+[vars]
+# Override these in the Cloudflare dashboard → Worker Settings → Variables
+# WEBHOOK_URL = "https://your-app.replit.app/api/webhook/receive-email"
+# WEBHOOK_SECRET = "set-this-as-a-secret-not-a-plain-var"
